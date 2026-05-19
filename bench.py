@@ -16,6 +16,7 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -175,6 +176,68 @@ def parse_hf_url(url: str) -> str:
     return m.group(1)
 
 
+_TIMING_RE = re.compile(r"\[\s*Prompt:\s*([\d.]+)\s*t/s\s*\|\s*Generation:\s*([\d.]+)\s*t/s\s*\]")
+_BUILD_RE = re.compile(r"^build\s*:\s*(\S+)", re.MULTILINE)
+
+
+def write_summary(args, repo_id: str, gpu: str, pick: dict,
+                  instance_id: int, out_path: Path) -> Path | None:
+    """Parse the benchmark stdout and write a curated markdown summary."""
+    try:
+        text = out_path.read_text(errors="replace")
+    except FileNotFoundError:
+        return None
+    timing = _TIMING_RE.search(text)
+    build = _BUILD_RE.search(text)
+
+    date = datetime.date.today().isoformat()
+    slug = repo_id.replace("/", "_").lower()
+    gpu_short = args.gpu.lower().replace("-", "").replace("_", "")
+    summary_dir = ROOT / "benchmarks"
+    summary_dir.mkdir(exist_ok=True)
+    base = summary_dir / f"{date}_{slug}_{args.num_gpus}x{gpu_short}.md"
+    summary_path, n = base, 2
+    while summary_path.exists():
+        summary_path = base.with_stem(f"{base.stem}-{n}")
+        n += 1
+
+    lines = [
+        f"# {repo_id} ({args.quant}) on {args.num_gpus}× {gpu}",
+        "",
+        "| | |",
+        "|---|---|",
+        f"| Date         | {date} |",
+        f"| Model        | [{repo_id}](https://huggingface.co/{repo_id}) |",
+        f"| Quant        | {args.quant} |",
+        f"| GPU          | {args.num_gpus}× {gpu} |",
+        f"| vast.ai host | machine {pick.get('host_id', '?')}, {pick.get('geolocation', '?')} |",
+        f"| llama.cpp    | master @ `{build.group(1) if build else 'unknown'}` |",
+        f"| Image        | `{args.image}` |",
+        f"| Instance     | {instance_id} |",
+        f"| $/hr         | ${pick['dph_total']:.3f} |",
+        "",
+        "## Command",
+        "",
+        "```bash",
+        f"./bench.py {args.model_url} \\",
+        f"    --gpu {args.gpu} --num-gpus {args.num_gpus} \\",
+        f"    --bin {args.bin} \\",
+        f"    --params {shlex.quote(args.params)}",
+        "```",
+        "",
+        "## Result",
+        "",
+    ]
+    if timing:
+        lines += ["```", f"[ Prompt: {timing.group(1)} t/s | Generation: {timing.group(2)} t/s ]", "```"]
+    else:
+        lines.append("Timing trailer not found in output — run likely failed before generation.")
+
+    lines += ["", "## Raw output", "", f"`results/{instance_id}.out` (not in git)."]
+    summary_path.write_text("\n".join(lines) + "\n")
+    return summary_path
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("model_url", help="Hugging Face model URL, e.g. https://huggingface.co/owner/repo")
@@ -244,13 +307,19 @@ def main() -> int:
         if rc != 0:
             print(f"remote_setup.sh exited with {rc}", file=sys.stderr)
 
-        print("\nFetching log + summary...")
+        print("\nFetching log + bench output...")
         out_dir = ROOT / "results"
         out_dir.mkdir(exist_ok=True)
         scp(info, "/root/bench.log", str(out_dir / f"{instance_id}.log"), direction="from")
         scp(info, "/root/bench.out", str(out_dir / f"{instance_id}.out"), direction="from")
-        print(f"\n=== {out_dir / f'{instance_id}.out'} ===")
-        print((out_dir / f"{instance_id}.out").read_text())
+
+        summary = write_summary(args, repo_id, gpu, pick, instance_id,
+                                out_dir / f"{instance_id}.out")
+        if summary:
+            print(f"\nSummary written to {summary.relative_to(ROOT)}")
+            print(summary.read_text())
+        else:
+            print(f"\nNo summary written (output file missing).")
         return rc
     finally:
         if args.keep:
