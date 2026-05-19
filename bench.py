@@ -71,6 +71,11 @@ def search_offers(gpu: str, num_gpus: int, min_disk_gb: int, max_hourly: float |
     return json.loads(raw)
 
 
+def attach_ssh_key(instance_id: int, pubkey_path: Path) -> None:
+    pubkey = pubkey_path.read_text().strip()
+    vastai("attach", "ssh", str(instance_id), pubkey)
+
+
 def create_instance(offer_id: int, image: str, disk_gb: int, onstart_cmd: str) -> int:
     raw = vastai(
         "create", "instance", str(offer_id),
@@ -93,7 +98,15 @@ def show_instance(instance_id: int) -> dict:
     return json.loads(raw)
 
 
+_SSH_URL_RE = re.compile(r"ssh://(?P<user>[^@]+)@(?P<host>[^:]+):(?P<port>\d+)")
+
+
 def wait_ssh(instance_id: int, timeout: int = 900) -> dict:
+    """Wait for the instance to be running and reachable via its direct ssh-url.
+
+    The ssh3.vast.ai proxy endpoint (info['ssh_host']) often refuses our key even
+    after attach; the direct endpoint from `vastai ssh-url` works reliably.
+    """
     deadline = time.monotonic() + timeout
     last_status = None
     while time.monotonic() < deadline:
@@ -102,23 +115,15 @@ def wait_ssh(instance_id: int, timeout: int = 900) -> dict:
         if status != last_status:
             print(f"  status: {status}")
             last_status = status
-        ssh_host = info.get("ssh_host") or info.get("public_ipaddr")
-        ssh_port = info.get("ssh_port") or _direct_ssh_port(info)
-        if status == "running" and ssh_host and ssh_port and _ssh_ping(ssh_host, ssh_port):
-            info["_ssh_host"] = ssh_host
-            info["_ssh_port"] = int(ssh_port)
-            return info
+        if status == "running":
+            url = vastai("ssh-url", str(instance_id)).strip()
+            m = _SSH_URL_RE.match(url)
+            if m and _ssh_ping(m.group("host"), int(m.group("port"))):
+                info["_ssh_host"] = m.group("host")
+                info["_ssh_port"] = int(m.group("port"))
+                return info
         time.sleep(10)
     raise TimeoutError(f"instance {instance_id} not SSH-ready within {timeout}s")
-
-
-def _direct_ssh_port(info: dict) -> int | None:
-    # When --direct is used, port 22 in container is mapped on the host.
-    ports = info.get("ports") or {}
-    mapping = ports.get("22/tcp")
-    if mapping and isinstance(mapping, list) and mapping:
-        return int(mapping[0].get("HostPort", 0)) or None
-    return None
 
 
 def _ssh_ping(host: str, port: int) -> bool:
@@ -184,6 +189,8 @@ def main() -> int:
     p.add_argument("--max-hourly", type=float, help="reject offers above this $/hr")
     p.add_argument("--yes", action="store_true", help="skip interactive offer confirmation")
     p.add_argument("--keep", action="store_true", help="leave the instance running on exit")
+    p.add_argument("--ssh-pubkey", default="~/.ssh/id_rsa.pub",
+                   help="local public key to attach to the rented instance")
     args = p.parse_args()
 
     gpu = normalize_gpu(args.gpu)
@@ -221,6 +228,10 @@ def main() -> int:
     print(f"  instance id: {instance_id}")
 
     try:
+        pubkey = Path(args.ssh_pubkey).expanduser()
+        print(f"Attaching SSH key {pubkey}...")
+        attach_ssh_key(instance_id, pubkey)
+
         print("Waiting for SSH...")
         info = wait_ssh(instance_id)
         print(f"  ssh root@{info['_ssh_host']} -p {info['_ssh_port']}")

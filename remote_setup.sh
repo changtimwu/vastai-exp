@@ -22,7 +22,7 @@ apt-get install -y --no-install-recommends \
     git build-essential cmake ninja-build ccache \
     python3 python3-pip libcurl4-openssl-dev ca-certificates curl
 
-pip install -q --break-system-packages huggingface_hub hf_transfer
+pip install -q huggingface_hub hf_transfer
 export HF_HUB_ENABLE_HF_TRANSFER=1
 
 cd /root
