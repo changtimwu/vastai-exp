@@ -22,10 +22,14 @@ Example — Qwen3.6-27B with MTP speculative decoding on 2x RTX 5060 Ti:
 ```bash
 ./bench.py https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF \
     --gpu rtx-5060ti --num-gpus 2 \
-    --bin llama-cli \
+    --bin llama-completion \
     --params "--spec-draft-p-min 0.75 --spec-type draft-mtp" \
     --max-hourly 0.4 --yes
 ```
+
+Use `llama-completion` for one-shot benchmarking; `llama-cli` is the chat REPL
+and ignores stdin EOF (it'll loop printing `>` until killed). `llama-bench`
+doesn't support speculative-decoding flags.
 
 What it does, end to end:
 

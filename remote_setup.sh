@@ -35,7 +35,7 @@ HEAD_SHA=$(git rev-parse --short HEAD)
 echo "llama.cpp @ $HEAD_SHA"
 
 cmake -B build -G Ninja -DGGML_CUDA=ON -DLLAMA_CURL=ON
-cmake --build build -j --target llama-bench llama-cli llama-server
+cmake --build build -j --target llama-bench llama-cli llama-completion llama-server
 
 # Pick a GGUF file matching the requested quant; fall back to first .gguf.
 python3 - "$REPO_ID" "$QUANT" <<'PY'
@@ -66,25 +66,27 @@ cd /root/llama.cpp
 
 PROMPT='Explain in detail how speculative decoding works in a transformer-based language model, covering draft models, verification, acceptance criteria, and the speedups it enables. Use technical language and concrete examples.'
 
-# For llama-cli we need a prompt + -n; llama-bench has its own modes.
+# llama-cli is the chat REPL and loops forever even with stdin closed;
+# llama-completion is the one-shot binary recent llama.cpp directs us to.
 case "$BIN" in
-    llama-cli)
-        EXTRA_DEFAULTS=(-p "$PROMPT" -n 256 --no-conversation --no-warmup -s 42)
+    llama-cli|llama-completion)
+        EXTRA_DEFAULTS=(-p "$PROMPT" -n 256 --no-warmup -s 42)
         ;;
     *)
         EXTRA_DEFAULTS=()
         ;;
 esac
 
-# Word-split $PARAMS intentionally so user-supplied flags reach the binary.
+# Word-split $PARAMS intentionally. Hard timeout + stdin closed so any
+# interactive-mode regression in upstream llama.cpp can't run away.
 # shellcheck disable=SC2086
-./build/bin/"$BIN" \
+timeout --signal=SIGKILL 600 ./build/bin/"$BIN" \
     -m "$MODEL" \
     -ngl 999 \
     --tensor-split "$SPLIT" \
     "${EXTRA_DEFAULTS[@]}" \
     $PARAMS \
-    2>&1 | tee /root/bench.out
+    </dev/null 2>&1 | tee /root/bench.out
 
 echo
 echo "=== done; head/$HEAD_SHA ==="
