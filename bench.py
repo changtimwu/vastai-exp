@@ -39,6 +39,7 @@ GPU_ALIASES = {
     "rtx-4090": "RTX_4090",
     "rtx-4080": "RTX_4080",
     "rtx-3090": "RTX_3090",
+    "rtx-3060": "RTX_3060",
     "h100": "H100_SXM",
     "h100-pcie": "H100_PCIE",
     "a100": "A100_SXM4",
@@ -55,15 +56,19 @@ def normalize_gpu(name: str) -> str:
     return GPU_ALIASES.get(key, name.replace("-", "_").replace(" ", "_"))
 
 
-def search_offers(gpu: str, num_gpus: int, min_disk_gb: int, max_hourly: float | None) -> list[dict]:
+def search_offers(gpu: str, num_gpus: int, min_disk_gb: int,
+                  min_cpu_ram_gb: int, max_hourly: float | None) -> list[dict]:
+    # NOTE: vastai's `cpu_ram` filter expects GB (the JSON field is MB) —
+    # don't mix units here.
     parts = [
         f"gpu_name={gpu}",
         f"num_gpus={num_gpus}",
         "verified=true",
         "rentable=true",
         f"disk_space>={min_disk_gb}",
+        f"cpu_ram>={min_cpu_ram_gb}",
         "reliability>0.98",
-        "cuda_max_good>=12.8",
+        "cuda_max_good>=12.4",
         "inet_down>=200",
     ]
     if max_hourly is not None:
@@ -248,6 +253,8 @@ def main() -> int:
                    help="llama.cpp binary to run (llama-bench, llama-cli, llama-server)")
     p.add_argument("--quant", default="Q4_K_M", help="quant substring to match in GGUF filenames")
     p.add_argument("--disk", type=int, default=120, help="instance disk size in GB")
+    p.add_argument("--cpu-ram", type=int, default=16,
+                   help="minimum host CPU RAM in GB (raise for MoE CPU offload)")
     p.add_argument("--image", default="nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04")
     p.add_argument("--max-hourly", type=float, help="reject offers above this $/hr")
     p.add_argument("--yes", action="store_true", help="skip interactive offer confirmation")
@@ -265,7 +272,7 @@ def main() -> int:
     print(f"Params    : {args.params}")
 
     print("\nSearching offers...")
-    offers = search_offers(gpu, args.num_gpus, args.disk, args.max_hourly)
+    offers = search_offers(gpu, args.num_gpus, args.disk, args.cpu_ram, args.max_hourly)
     if not offers:
         print(f"no matching offers for {gpu} x{args.num_gpus}", file=sys.stderr)
         return 1
