@@ -27,9 +27,17 @@ Example — Qwen3.6-27B with MTP speculative decoding on 2x RTX 5060 Ti:
     --max-hourly 0.4 --yes
 ```
 
-Use `llama-completion` for one-shot benchmarking; `llama-cli` is the chat REPL
-and ignores stdin EOF (it'll loop printing `>` until killed). `llama-bench`
-doesn't support speculative-decoding flags.
+Picking the right binary is a maze:
+
+- `llama-completion` is the cleanest one-shot binary but its arg parser
+  (`LLAMA_EXAMPLE_COMPLETION`) doesn't accept the speculative-decoding flags
+  (`--spec-type`, `--spec-draft-p-min`, etc. are registered for
+  `LLAMA_EXAMPLE_CLI`/`SERVER`/`SPECULATIVE` only). Use it for vanilla runs.
+- `llama-cli` accepts the spec flags but enters chat REPL after `-p` finishes
+  and loops on EOF. We rely on the `timeout 600` in `remote_setup.sh` and parse
+  the `[ Prompt: X t/s | Generation: Y t/s ]` line that prints before the loop.
+- `llama-bench` is purpose-built for benchmarking but has no speculation
+  support at all.
 
 What it does, end to end:
 

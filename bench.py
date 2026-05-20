@@ -68,10 +68,11 @@ def search_offers(gpu: str, num_gpus: int, min_disk_gb: int,
         f"disk_space>={min_disk_gb}",
         f"cpu_ram>={min_cpu_ram_gb}",
         "reliability>0.98",
-        # NOTE: vastai's `cuda_max_good` filter snaps to certain values; e.g.
-        # `>=12.4` returns 0 even when every offer has 12.8+. We rely on the
-        # docker image to pin CUDA (12.8 by default) and let mismatched hosts
-        # fail fast on container start.
+        # vastai's `cuda_max_good` filter only matches on certain snap points
+        # (e.g. >=12.8 works, >=12.7/12.4/12.0 all return 0). Use 12.8 so our
+        # CUDA 12.8 image actually runs — without this filter we land on hosts
+        # whose NVIDIA driver is too old and the binary falls back to CPU-only.
+        "cuda_max_good>=12.8",
         "inet_down>=200",
     ]
     if max_hourly is not None:
