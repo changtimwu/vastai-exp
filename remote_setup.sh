@@ -79,6 +79,9 @@ esac
 
 # Word-split $PARAMS intentionally. Hard timeout + stdin closed so any
 # interactive-mode regression in upstream llama.cpp can't run away.
+# Cap bench.out at 5 MB — llama-cli loops on EOF after `-p` finishes, and
+# without the cap we'd scp back a multi-GB file of `>` prompts. head -c
+# closes the pipe once full, which SIGPIPEs llama-cli and exits cleanly.
 # shellcheck disable=SC2086
 timeout --signal=SIGKILL 600 ./build/bin/"$BIN" \
     -m "$MODEL" \
@@ -86,7 +89,8 @@ timeout --signal=SIGKILL 600 ./build/bin/"$BIN" \
     --tensor-split "$SPLIT" \
     "${EXTRA_DEFAULTS[@]}" \
     $PARAMS \
-    </dev/null 2>&1 | tee /root/bench.out
+    </dev/null 2>&1 | head -c 5242880 > /root/bench.out
+cat /root/bench.out
 
 echo
 echo "=== done; head/$HEAD_SHA ==="
