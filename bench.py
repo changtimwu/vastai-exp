@@ -129,7 +129,7 @@ def show_instance(instance_id: int) -> dict:
 _SSH_URL_RE = re.compile(r"ssh://(?P<user>[^@]+)@(?P<host>[^:]+):(?P<port>\d+)")
 
 
-def wait_ssh(instance_id: int, timeout: int = 900) -> dict:
+def wait_ssh(instance_id: int, timeout: int = 480) -> dict:
     """Wait for the instance to be running and reachable via its direct ssh-url.
 
     The ssh3.vast.ai proxy endpoint (info['ssh_host']) often refuses our key even
@@ -316,27 +316,30 @@ def main() -> int:
     ])
 
     print("\nCreating instance...")
-    instance_id = None
+    pubkey = Path(args.ssh_pubkey).expanduser()
+    instance_id, info = None, None
     for cand in offers[:5]:
         print(f"  trying offer {cand['id']} (${cand['dph_total']:.3f}/hr, {cand['geolocation']})")
-        instance_id = create_instance(cand["id"], args.image, args.disk, onstart)
-        if instance_id is not None:
-            pick = cand
+        candidate_id = create_instance(cand["id"], args.image, args.disk, onstart)
+        if candidate_id is None:
+            print(f"  offer {cand['id']} was snapped up, next")
+            continue
+        try:
+            attach_ssh_key(candidate_id, pubkey)
+            print(f"  attached key, waiting for SSH (instance {candidate_id})...")
+            info = wait_ssh(candidate_id)
+            print(f"  ssh root@{info['_ssh_host']} -p {info['_ssh_port']}")
+            instance_id, pick = candidate_id, cand
             break
-        print(f"  offer {cand['id']} unavailable, trying next")
+        except TimeoutError as e:
+            print(f"  host {cand['id']} never SSH-ready: {e}; destroying and trying next")
+            destroy_instance(candidate_id)
     if instance_id is None:
-        print("all top offers were snapped up between search and create", file=sys.stderr)
+        print("no working offer in top 5", file=sys.stderr)
         return 1
     print(f"  instance id: {instance_id}")
 
     try:
-        pubkey = Path(args.ssh_pubkey).expanduser()
-        print(f"Attaching SSH key {pubkey}...")
-        attach_ssh_key(instance_id, pubkey)
-
-        print("Waiting for SSH...")
-        info = wait_ssh(instance_id)
-        print(f"  ssh root@{info['_ssh_host']} -p {info['_ssh_port']}")
 
         print("Uploading remote_setup.sh...")
         scp(info, str(REMOTE_SETUP), "/root/remote_setup.sh", direction="to")
