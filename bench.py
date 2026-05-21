@@ -92,19 +92,31 @@ def attach_ssh_key(instance_id: int, pubkey_path: Path) -> None:
     vastai("attach", "ssh", str(instance_id), pubkey)
 
 
-def create_instance(offer_id: int, image: str, disk_gb: int, onstart_cmd: str) -> int:
-    raw = vastai(
-        "create", "instance", str(offer_id),
-        "--image", image,
-        "--disk", str(disk_gb),
-        "--ssh",
-        "--direct",
-        "--onstart-cmd", onstart_cmd,
-        "--cancel-unavail",
-        "--raw",
-    )
-    resp = json.loads(raw)
+def create_instance(offer_id: int, image: str, disk_gb: int, onstart_cmd: str) -> int | None:
+    """Try to create an instance from offer_id. Return None if the offer was
+    snapped up in between search and create (`no_such_ask`); raise on other errors."""
+    try:
+        raw = vastai(
+            "create", "instance", str(offer_id),
+            "--image", image,
+            "--disk", str(disk_gb),
+            "--ssh",
+            "--direct",
+            "--onstart-cmd", onstart_cmd,
+            "--cancel-unavail",
+            "--raw",
+        )
+    except subprocess.CalledProcessError as e:
+        raw = (e.stdout or "") + (e.stderr or "")
+    try:
+        resp = json.loads(raw)
+    except json.JSONDecodeError:
+        if "no_such_ask" in raw or "not available" in raw:
+            return None
+        raise RuntimeError(f"create returned non-JSON: {raw[:300]}")
     if not resp.get("success", True):
+        if "no_such_ask" in str(resp).lower():
+            return None
         raise RuntimeError(f"create failed: {resp}")
     return resp["new_contract"]
 
@@ -304,7 +316,17 @@ def main() -> int:
     ])
 
     print("\nCreating instance...")
-    instance_id = create_instance(pick["id"], args.image, args.disk, onstart)
+    instance_id = None
+    for cand in offers[:5]:
+        print(f"  trying offer {cand['id']} (${cand['dph_total']:.3f}/hr, {cand['geolocation']})")
+        instance_id = create_instance(cand["id"], args.image, args.disk, onstart)
+        if instance_id is not None:
+            pick = cand
+            break
+        print(f"  offer {cand['id']} unavailable, trying next")
+    if instance_id is None:
+        print("all top offers were snapped up between search and create", file=sys.stderr)
+        return 1
     print(f"  instance id: {instance_id}")
 
     try:
