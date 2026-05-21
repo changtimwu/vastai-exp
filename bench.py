@@ -63,7 +63,9 @@ def search_offers(gpu: str, num_gpus: int, min_disk_gb: int,
     parts = [
         f"gpu_name={gpu}",
         f"num_gpus={num_gpus}",
-        "verified=true",
+        # `verified=true` over-filters during low-supply windows; many hosts
+        # show `verified=None` (self-test pending) but are perfectly rentable.
+        # Reliability >0.98 below is the real safety net.
         "rentable=true",
         f"disk_space>={min_disk_gb}",
         f"cpu_ram>={min_cpu_ram_gb}",
